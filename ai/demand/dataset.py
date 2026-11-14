@@ -62,7 +62,7 @@ def _transform(frame, encoder):
     return np.concatenate([numeric, encoded], axis=1)
 
 
-def save_metadata(encoder, feature_names, split_sizes):
+def save_metadata(encoder, feature_names, split_sizes, split_strategy):
     metadata = {
         "numeric_features": NUMERIC_FEATURES,
         "categorical_features": CATEGORICAL_FEATURES,
@@ -73,6 +73,8 @@ def save_metadata(encoder, feature_names, split_sizes):
         "encoder_fit_scope": "training_rows_only",
         "handle_unknown": "ignore",
         "split_sizes": split_sizes,
+        "split_strategy": split_strategy,
+        "split_strategy": split_strategy,
         "data_type": "synthetic_pipeline_testing_data",
         "research_valid": False,
     }
@@ -89,16 +91,34 @@ def create_datasets():
     if len(dataframe) < 20:
         raise ValueError("Dataset must contain at least 20 valid rows.")
 
-    # Split raw rows BEFORE fitting categorical preprocessing to avoid leakage.
-    train_frame, temp_frame = train_test_split(
-        dataframe, test_size=VALIDATION_RATIO + TEST_RATIO,
-        random_state=RANDOM_SEED,
-    )
-    validation_fraction = VALIDATION_RATIO / (VALIDATION_RATIO + TEST_RATIO)
-    validation_frame, test_frame = train_test_split(
-        temp_frame, test_size=1 - validation_fraction,
-        random_state=RANDOM_SEED,
-    )
+    # Prefer chronological evaluation whenever dated observations are available.
+    date_column = next((name for name in ("snapshot_date", "date", "recorded_at") if name in dataframe.columns), None)
+    if date_column:
+        ordered = dataframe.copy()
+        ordered[date_column] = pd.to_datetime(ordered[date_column], errors="coerce")
+        ordered = ordered.dropna(subset=[date_column]).sort_values(date_column).reset_index(drop=True)
+        if ordered[date_column].nunique() < 3:
+            raise ValueError("At least three distinct dates are required for chronological demand evaluation.")
+        train_end = int(len(ordered) * 0.70)
+        validation_end = int(len(ordered) * 0.85)
+        if train_end < 1 or validation_end <= train_end or validation_end >= len(ordered):
+            raise ValueError("Not enough dated rows for chronological train/validation/test partitions.")
+        train_frame = ordered.iloc[:train_end].copy()
+        validation_frame = ordered.iloc[train_end:validation_end].copy()
+        test_frame = ordered.iloc[validation_end:].copy()
+        split_strategy = f"chronological_by_{date_column}"
+    else:
+        # Fallback for the legacy synthetic CSV only. Not suitable for forecasting claims.
+        train_frame, temp_frame = train_test_split(
+            dataframe, test_size=VALIDATION_RATIO + TEST_RATIO,
+            random_state=RANDOM_SEED,
+        )
+        validation_fraction = VALIDATION_RATIO / (VALIDATION_RATIO + TEST_RATIO)
+        validation_frame, test_frame = train_test_split(
+            temp_frame, test_size=1 - validation_fraction,
+            random_state=RANDOM_SEED,
+        )
+        split_strategy = "random_holdout_no_date_available"
 
     encoder = create_encoder()
     encoder.fit(train_frame[CATEGORICAL_FEATURES])
@@ -118,7 +138,7 @@ def create_datasets():
         "validation": len(validation_frame),
         "test": len(test_frame),
     }
-    save_metadata(encoder, feature_names, split_sizes)
+    save_metadata(encoder, feature_names, split_sizes, split_strategy)
 
     return {
         "X_train": X_train,
