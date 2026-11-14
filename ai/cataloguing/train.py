@@ -627,11 +627,17 @@ def print_metrics(
 
 def evaluate_test_set(model, test_loader, label_maps):
     """Evaluate the best validation checkpoint exactly once on held-out test data."""
-    checkpoint = torch.load(
-        BEST_MODEL_PATH,
-        map_location=DEVICE,
-        weights_only=False,
-    )
+    try:
+        checkpoint = torch.load(
+            BEST_MODEL_PATH,
+            map_location=DEVICE,
+            weights_only=True,
+        )
+    except TypeError:
+        checkpoint = torch.load(
+            BEST_MODEL_PATH,
+            map_location=DEVICE,
+        )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 
