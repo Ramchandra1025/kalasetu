@@ -51,3 +51,26 @@ This document separates code-level improvements from algorithm changes that need
 3. Several modules are decision-support engines rather than trained ML models. Do not add an ML algorithm just to make every module look like machine learning.
 4. A commit is not proof of execution. The changes on this branch still require local dependency installation, model training, inference smoke tests and backend endpoint tests.
 5. Do not merge this branch into `main` until those tests pass and generated model artifacts are reviewed.
+
+
+## Additional implementation changes (latest branch work)
+
+| Module | Implemented change | Validation status |
+|---|---|---|
+| Inventory Intelligence | Removed training on labels derived from current stock coverage. Training now requires an observed future outcome column, `stockout_within_7d`; prediction uses an explainable reorder-point policy until such labels exist. | Training correctly refuses the current dataset because the future outcome is absent. Runtime and real-data evaluation pending. |
+| Product Cataloguing | Added held-out test-set accuracy, macro-F1 and per-class reports for category, material and color using the best validation checkpoint. | Code committed; training and test evaluation not executed locally. Current 12 images remain pipeline-only. |
+| NLP / Semantic Intelligence | Text normalization now preserves Unicode letters; removed the meaningless TF-IDF self-similarity (which was always 1.0); output clarifies keyword score is not calibrated probability. | Code committed; multilingual corpus and relevance benchmark still required. |
+| Craft Verification | Similarity outputs no longer call a high score `VERIFIED`; they return match-candidate wording and explicitly state that similarity is not probability or proof of authenticity. Added a real image-pair evaluation script with validation-only threshold selection and held-out test metrics. | Code committed; requires manually verified same/different physical-product pairs. |
+| Demand Prediction | Uses chronological train/validation/test partitions when a date field (`snapshot_date`, `date`, or `recorded_at`) exists; legacy random split is retained only as a clearly named fallback. | Code committed; current synthetic dataset still does not establish forecast validity. |
+| Fair Pricing | Uses chronological partitions when dated quote fields (`quote_date`, `created_at`, or `date`) exist; random splitting remains only for legacy undated data. | Code committed; current synthetic dataset still does not establish pricing validity. |
+
+### Required real-data schemas for the next experiment
+
+- Inventory: one row per product/inventory snapshot, including a snapshot timestamp and an independently observed `stockout_within_7d` outcome recorded after the snapshot.
+- Cataloguing: image path, stable product ID, category, material, color, artisan/source, capture conditions; all images of one product must stay in one split.
+- NLP: product ID, original description, language, buyer query, judged relevance and annotator/source.
+- Verification: image A, image B, binary same-physical-product label, product IDs, and a preassigned train/validation/test split with product identities disjoint across splits.
+- Demand: dated sales/order snapshots and future demand target; no future-derived feature may enter the prediction inputs.
+- Pricing: dated artisan quotes and accepted transaction prices, with actual material/labour/overhead inputs.
+
+Do not report accuracy, model superiority, authenticity detection or business impact until real observations have been collected and the prescribed held-out evaluation has been run.
