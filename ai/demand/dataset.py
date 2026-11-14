@@ -74,7 +74,6 @@ def save_metadata(encoder, feature_names, split_sizes, split_strategy):
         "handle_unknown": "ignore",
         "split_sizes": split_sizes,
         "split_strategy": split_strategy,
-        "split_strategy": split_strategy,
         "data_type": "synthetic_pipeline_testing_data",
         "research_valid": False,
     }
@@ -151,6 +150,7 @@ def create_datasets():
         "feature_names": feature_names,
         "dataframe": dataframe,
         "split_sizes": split_sizes,
+        "split_strategy": split_strategy,
     }
 
 
