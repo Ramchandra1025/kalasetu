@@ -21,6 +21,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+from sklearn.metrics import accuracy_score, f1_score, classification_report
+
 from ai.cataloguing.config import (
     DEVICE,
     NUM_EPOCHS,
@@ -620,6 +622,66 @@ def print_metrics(
 
 
 # ============================================================
+# UNTOUCHED TEST-SET EVALUATION
+# ============================================================
+
+def evaluate_test_set(model, test_loader, label_maps):
+    """Evaluate the best validation checkpoint exactly once on held-out test data."""
+    checkpoint = torch.load(
+        BEST_MODEL_PATH,
+        map_location=DEVICE,
+        weights_only=False,
+    )
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+
+    targets = {"category": [], "material": [], "color": []}
+    predictions = {"category": [], "material": [], "color": []}
+    with torch.inference_mode():
+        for batch in test_loader:
+            images = batch["image"].to(DEVICE)
+            outputs = model(images)
+            for task in targets:
+                target = batch[task].cpu().numpy().tolist()
+                predicted = outputs[task].argmax(dim=1).cpu().numpy().tolist()
+                targets[task].extend(target)
+                predictions[task].extend(predicted)
+
+    report = {}
+    for task in targets:
+        report[task] = {
+            "accuracy": float(accuracy_score(targets[task], predictions[task])),
+            "macro_f1": float(f1_score(
+                targets[task], predictions[task], average="macro", zero_division=0
+            )),
+            "classification_report": classification_report(
+                targets[task], predictions[task], output_dict=True, zero_division=0
+            ),
+        }
+
+    result = {
+        "evaluation_type": "held_out_test_set",
+        "dataset_images": sum(len(v) for v in targets.values()) // 3,
+        "metrics": report,
+        "research_valid": False,
+        "warning": (
+            "Current dataset is only a 12-image pipeline test. "
+            "These metrics are not evidence of generalization or real-world accuracy."
+        ),
+    }
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = RESULTS_DIR / "held_out_test_evaluation.json"
+    with open(output_path, "w", encoding="utf-8") as file:
+        json.dump(result, file, indent=2)
+    print(f"Held-out test evaluation saved: {output_path}")
+    print(json.dumps({
+        task: {"accuracy": values["accuracy"], "macro_f1": values["macro_f1"]}
+        for task, values in report.items()
+    }, indent=2))
+    return result
+
+
+# ============================================================
 # MAIN TRAINING
 # ============================================================
 
@@ -869,6 +931,9 @@ def train():
             print(
                 f"  Path: {BEST_MODEL_PATH}"
             )
+
+    # Evaluate the best validation-selected checkpoint on the untouched test set.
+    test_evaluation = evaluate_test_set(model, test_loader, label_maps)
 
     # --------------------------------------------------------
     # Training complete
