@@ -64,14 +64,30 @@ def split_dataframe(dataframe):
             "for a pipeline smoke test; substantially more are needed for research."
         )
 
-    train_df, temporary_df = train_test_split(
-        dataframe, test_size=VALIDATION_RATIO + TEST_RATIO,
-        random_state=RANDOM_SEED,
-    )
-    test_fraction = TEST_RATIO / (VALIDATION_RATIO + TEST_RATIO)
-    validation_df, test_df = train_test_split(
-        temporary_df, test_size=test_fraction, random_state=RANDOM_SEED,
-    )
+    date_column = next((name for name in ("quote_date", "created_at", "date") if name in dataframe.columns), None)
+    if date_column:
+        ordered = dataframe.copy()
+        ordered[date_column] = pd.to_datetime(ordered[date_column], errors="coerce")
+        ordered = ordered.dropna(subset=[date_column]).sort_values(date_column).reset_index(drop=True)
+        if ordered[date_column].nunique() < 3:
+            raise ValueError("At least three distinct dates are required for chronological pricing evaluation.")
+        train_end = int(len(ordered) * TRAIN_RATIO)
+        validation_end = int(len(ordered) * (TRAIN_RATIO + VALIDATION_RATIO))
+        if train_end < 1 or validation_end <= train_end or validation_end >= len(ordered):
+            raise ValueError("Not enough dated quote rows for chronological train/validation/test partitions.")
+        train_df = ordered.iloc[:train_end].copy()
+        validation_df = ordered.iloc[train_end:validation_end].copy()
+        test_df = ordered.iloc[validation_end:].copy()
+    else:
+        # Legacy synthetic-data fallback only; final pricing research needs dated quotes.
+        train_df, temporary_df = train_test_split(
+            dataframe, test_size=VALIDATION_RATIO + TEST_RATIO,
+            random_state=RANDOM_SEED,
+        )
+        test_fraction = TEST_RATIO / (VALIDATION_RATIO + TEST_RATIO)
+        validation_df, test_df = train_test_split(
+            temporary_df, test_size=test_fraction, random_state=RANDOM_SEED,
+        )
     return (
         train_df.reset_index(drop=True),
         validation_df.reset_index(drop=True),
