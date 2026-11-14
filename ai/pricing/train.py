@@ -1,316 +1,115 @@
-"""
-KalaSetu - Fair Pricing AI
-Training Pipeline
-
-Purpose:
-    Train the XGBoost fair-price regression model.
-
-IMPORTANT:
-    The current pricing dataset is synthetic and is used only
-    to validate the complete ML pipeline.
-
-    These results MUST NOT be presented as research findings.
-"""
-
+"""Train and compare pricing candidates; retain XGBoost as active until evidence supports change."""
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
-from .dataset import create_datasets
-from .model import (
-    train_model,
-    predict_price,
-    save_model,
-    get_feature_importance,
-)
+import numpy as np
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from .config import (
-    DATASET_FILE,
-    EXPERIMENT_DIR,
-    RESULTS_DIR,
-    RANDOM_SEED,
+    DATASET_FILE, EXPERIMENT_DIR, RESULTS_DIR, RANDOM_SEED,
+    CANDIDATE_MODELS,
 )
+from .dataset import create_datasets
+from .model import (
+    create_model, predict_price, save_model, get_feature_importance,
+    prepare_catboost_frame,
+)
+
+
+def _metrics(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    nonzero = y_true != 0
+    return {
+        "mae": float(mean_absolute_error(y_true, y_pred)),
+        "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
+        "r2": float(r2_score(y_true, y_pred)) if len(y_true) >= 2 else None,
+        "mape": float(np.mean(np.abs((y_true[nonzero] - y_pred[nonzero]) / y_true[nonzero])) * 100)
+        if np.any(nonzero) else None,
+    }
+
+
+def _cost_plus_baseline(frame):
+    """Transparent baseline: predict direct material + labour cost, no invented margin."""
+    return (
+        frame["material_cost"].to_numpy(dtype=float)
+        + frame["labor_cost"].to_numpy(dtype=float)
+    )
 
 
 def main():
+    data = create_datasets()
+    X_train, X_val, X_test = data["X_train"], data["X_validation"], data["X_test"]
+    y_train, y_val = data["y_train"], data["y_validation"]
+    val_rows = data["validation_dataframe"]
 
-    print("=" * 70)
-    print("KALASETU - FAIR PRICING AI TRAINING")
-    print("=" * 70)
-
-    # ============================================================
-    # 1. CREATE DATASETS
-    # ============================================================
-
-    print("\n[1/5] Preparing pricing dataset...")
-
-    datasets = create_datasets()
-
-    X_train = datasets["X_train"]
-    X_validation = datasets["X_validation"]
-    X_test = datasets["X_test"]
-
-    y_train = datasets["y_train"]
-    y_validation = datasets["y_validation"]
-    y_test = datasets["y_test"]
-
-    encoder = datasets["encoder"]
-    feature_names = datasets["feature_names"]
-
-    print("\nDataset preparation completed.")
-
-    print(f"  Training samples   : {len(X_train)}")
-    print(f"  Validation samples : {len(X_validation)}")
-    print(f"  Test samples       : {len(X_test)}")
-    print(f"  Total features     : {len(feature_names)}")
-
-    # ============================================================
-    # 2. TRAIN MODEL
-    # ============================================================
-
-    print("\n[2/5] Training XGBoost regression model...")
-
-    model = train_model(
-        X_train,
-        y_train,
-        X_validation,
-        y_validation,
-    )
-
-    print("Training completed successfully.")
-
-    # ============================================================
-    # 3. VALIDATION PREDICTIONS
-    # ============================================================
-
-    print("\n[3/5] Generating validation predictions...")
-
-    validation_predictions = predict_price(
-        model,
-        X_validation,
-    )
-
-    print(
-        f"Validation predictions generated: "
-        f"{len(validation_predictions)}"
-    )
-
-    print("\nValidation Predictions:")
-
-    for index, prediction in enumerate(validation_predictions):
-
-        actual = float(y_validation[index])
-
-        print(
-            f"  Sample {index + 1}: "
-            f"Actual = ₹{actual:.2f} | "
-            f"Predicted = ₹{prediction:.2f}"
-        )
-
-    # ============================================================
-    # 4. FEATURE IMPORTANCE
-    # ============================================================
-
-    print("\n[4/5] Calculating feature importance...")
-
-    feature_importance = get_feature_importance(
-        model,
-        feature_names,
-    )
-
-    print("\nTop Feature Importance:")
-
-    for item in feature_importance[:10]:
-
-        print(
-            f"  {item['feature']:<30} "
-            f"{item['importance']:.6f}"
-        )
-
-    # ============================================================
-    # 5. SAVE MODEL + EXPERIMENT
-    # ============================================================
-
-    print("\n[5/5] Saving trained model...")
-
-    save_model(
-        model,
-        encoder,
-        feature_names,
-    )
-
-    # ============================================================
-    # TRAINING SUMMARY
-    # ============================================================
-
-    experiment_summary = {
-        "experiment_name": "fair_pricing_xgboost_pipeline_test",
-        "model_name": "xgboost_regressor",
-        "model_version": "1.0.0",
-
-        "dataset_file": str(DATASET_FILE),
-
-        "dataset_size": int(
-            len(X_train)
-            + len(X_validation)
-            + len(X_test)
-        ),
-
-        "training_samples": int(len(X_train)),
-        "validation_samples": int(len(X_validation)),
-        "test_samples": int(len(X_test)),
-
-        "feature_count": int(len(feature_names)),
-
-        "random_seed": RANDOM_SEED,
-
-        "data_type": "synthetic_pipeline_testing_data",
-
-        "research_valid": False,
-
-        "warning": (
-            "The current dataset is synthetic and is used "
-            "only for pipeline validation. These results "
-            "must not be presented as research findings."
-        ),
-
-        "created_at": datetime.now().isoformat(),
-
-        "validation_predictions": [
-            {
-                "actual_price": float(
-                    y_validation[index]
-                ),
-                "predicted_price": float(
-                    validation_predictions[index]
-                ),
+    comparison = {}
+    fitted = {}
+    for name in CANDIDATE_MODELS:
+        try:
+            model = create_model(name)
+            if name == "catboost":
+                train_frame = prepare_catboost_frame(X_train)
+                val_frame = prepare_catboost_frame(X_val)
+                model.fit(train_frame, y_train, cat_features=[
+                    X_train.columns.get_loc(c) for c in ("craft_category", "material", "region")
+                ])
+                predictions = model.predict(val_frame)
+            else:
+                model.fit(X_train, y_train)
+                predictions = predict_price(model, X_val)
+            comparison[name] = {
+                "status": "trained",
+                "validation_metrics": _metrics(y_val, predictions),
             }
-            for index in range(
-                len(validation_predictions)
-            )
-        ],
+            fitted[name] = model
+        except ImportError as exc:
+            comparison[name] = {"status": "skipped_dependency_missing", "reason": str(exc)}
 
-        "feature_importance": feature_importance,
+    baseline_predictions = _cost_plus_baseline(val_rows)
+    comparison["cost_plus_direct_cost"] = {
+        "status": "baseline",
+        "validation_metrics": _metrics(y_val, baseline_predictions),
+        "note": "Direct material + labour cost only; excludes overhead and margin.",
     }
 
-    summary_file = (
-        EXPERIMENT_DIR
-        / "training_summary.json"
-    )
+    # Keep the current production family until a meaningful dataset supports selection.
+    active_name = "xgboost"
+    if active_name not in fitted:
+        raise RuntimeError("XGBoost training failed; no production artifact was changed.")
+    active_model = fitted[active_name]
+    importance = get_feature_importance(active_model, data["feature_names"])
+    save_model(active_model, feature_names=data["feature_names"], model_name=active_name)
 
-    with open(
-        summary_file,
-        "w",
-        encoding="utf-8",
-    ) as file:
-
-        json.dump(
-            experiment_summary,
-            file,
-            indent=4,
-        )
-
-    # ============================================================
-    # TRAINING RESULT
-    # ============================================================
-
-    training_result = {
-        "model": "XGBRegressor",
-
-        "task": "fair_price_regression",
-
-        "dataset_size": int(
-            len(X_train)
-            + len(X_validation)
-            + len(X_test)
+    result = {
+        "experiment": "fair_pricing_candidate_comparison_v2",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "dataset_file": str(DATASET_FILE),
+        "dataset_rows": int(len(data["dataframe"])),
+        "split_sizes": {
+            "train": int(len(X_train)),
+            "validation": int(len(X_val)),
+            "test_reserved": int(len(X_test)),
+        },
+        "random_seed": RANDOM_SEED,
+        "candidates": comparison,
+        "active_model": active_name,
+        "selection_policy": (
+            "XGBoost remains active during pipeline upgrade. Validation on the current "
+            "30-row synthetic dataset is too small for reliable model selection."
         ),
-
-        "train_size": int(len(X_train)),
-        "validation_size": int(len(X_validation)),
-        "test_size": int(len(X_test)),
-
-        "feature_count": int(len(feature_names)),
-
+        "feature_importance": importance,
+        "data_type": data["data_type"],
         "research_valid": False,
-
-        "status": "training_completed",
+        "warning": "Synthetic pipeline-testing data only; do not report these metrics as research evidence.",
     }
+    (EXPERIMENT_DIR / "model_comparison.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    (RESULTS_DIR / "training_result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
 
-    result_file = (
-        RESULTS_DIR
-        / "training_result.json"
-    )
-
-    with open(
-        result_file,
-        "w",
-        encoding="utf-8",
-    ) as file:
-
-        json.dump(
-            training_result,
-            file,
-            indent=4,
-        )
-
-    # ============================================================
-    # FINAL OUTPUT
-    # ============================================================
-
-    print("\n" + "=" * 70)
-    print("TRAINING PIPELINE COMPLETED")
-    print("=" * 70)
-
-    print("\nModel:")
-    print("  XGBoost Regressor")
-
-    print("\nDataset:")
-    print(f"  {DATASET_FILE}")
-
-    print("\nSamples:")
-    print(f"  Train      : {len(X_train)}")
-    print(f"  Validation : {len(X_validation)}")
-    print(f"  Test       : {len(X_test)}")
-
-    print("\nFiles generated:")
-
-    print(
-        "  Model      : "
-        "ml/models/pricing/fair_pricing_model.json"
-    )
-
-    print(
-        "  Encoder    : "
-        "ml/models/pricing/feature_encoder.joblib"
-    )
-
-    print(
-        "  Metadata   : "
-        "ml/models/pricing/model_metadata.json"
-    )
-
-    print(
-        "  Experiment : "
-        "research/experiments/pricing/"
-        "training_summary.json"
-    )
-
-    print(
-        "  Result     : "
-        "research/results/pricing/"
-        "training_result.json"
-    )
-
-    print("\nIMPORTANT:")
-    print(
-        "  Current dataset is synthetic "
-        "pipeline-testing data."
-    )
-
-    print(
-        "  Research-valid result: NO"
-    )
-
-    print("\nTRAINING PIPELINE TEST PASSED.")
+    print("Pricing candidate comparison completed.")
+    print(json.dumps(comparison, indent=2))
+    print(f"Active model saved: {active_name}")
+    print("Research-valid: NO (synthetic 30-row dataset).")
 
 
 if __name__ == "__main__":
