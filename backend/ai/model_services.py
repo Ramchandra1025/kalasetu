@@ -73,8 +73,8 @@ class CataloguingService(AIService):
 class PricingService(AIService):
 
     service_name = "pricing"
-    model_name = "XGBRegressor"
-    model_version = "1.0.0"
+    model_name = "XGBRegressor (candidate comparison v2)"
+    model_version = "2.0.0"
 
     REQUIRED_FIELDS = [
         "size_cm",

@@ -69,9 +69,9 @@ def verify_pair(
         "similarity": similarity,
         "prediction": prediction,
         "status": (
-            "VERIFIED"
+            "MATCH_CANDIDATE"
             if prediction == 1
-            else "SUSPICIOUS"
+            else "NO_CONFIDENT_MATCH"
         ),
     }
 

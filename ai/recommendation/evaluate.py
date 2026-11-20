@@ -4,10 +4,12 @@ Evaluation
 """
 
 import json
+import math
 
 from .config import (
     EVALUATION_DIR,
     RESULTS_DIR,
+    TARGET_COLUMN,
 )
 
 from .dataset import (
@@ -16,7 +18,23 @@ from .dataset import (
 
 from .scoring import (
     rank_products_for_buyer,
+    score_buyer_product,
 )
+
+
+def calculate_ndcg_at_k(scored_relevance, k=5):
+    """NDCG using expected_match as graded relevance; current labels are synthetic."""
+    ranked = sorted(scored_relevance, key=lambda item: item[0], reverse=True)[:k]
+    ideal = sorted((item[1] for item in scored_relevance), reverse=True)[:k]
+
+    def dcg(values):
+        return sum(
+            (2 ** max(0.0, min(float(value), 1.0)) - 1) / math.log2(index + 2)
+            for index, value in enumerate(values)
+        )
+
+    ideal_dcg = dcg(ideal)
+    return dcg([item[1] for item in ranked]) / ideal_dcg if ideal_dcg else 0.0
 
 
 # ============================================================
@@ -50,6 +68,8 @@ def main():
         f"{len(buyers)}"
     )
 
+    ndcg_scores = []
+
     for buyer_id in buyers:
 
         ranked = rank_products_for_buyer(
@@ -60,6 +80,15 @@ def main():
         all_results[
             buyer_id
         ] = ranked
+
+        buyer_rows = dataframe[dataframe["buyer_id"] == buyer_id]
+        scored_relevance = []
+        for _, row in buyer_rows.iterrows():
+            match_score = score_buyer_product(row)["match_score"]
+            graded_relevance = float(row[TARGET_COLUMN]) / 100.0
+            scored_relevance.append((match_score, graded_relevance))
+        if scored_relevance:
+            ndcg_scores.append(calculate_ndcg_at_k(scored_relevance, k=5))
 
     # --------------------------------------------------------
     # Collect scores
@@ -188,6 +217,12 @@ def main():
             float(
                 average_score
             ),
+
+        "synthetic_proxy_ndcg_at_5":
+            float(sum(ndcg_scores) / len(ndcg_scores)) if ndcg_scores else None,
+
+        "ranking_metric_note":
+            "NDCG uses expected_match synthetic proxy labels; not real buyer relevance or research evidence.",
 
         "high_matches":
             high_count,

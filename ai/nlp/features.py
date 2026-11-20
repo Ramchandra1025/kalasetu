@@ -19,7 +19,7 @@ def clean_text(text: str) -> str:
     text = str(text).lower()
 
     text = re.sub(
-        r"[^a-z0-9\s]",
+        r"[^\w\s]",
         " ",
         text,
     )

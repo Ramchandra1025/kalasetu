@@ -4,3 +4,8 @@ supabase
 requests
 argon2-cffi
 flask-cors
+numpy
+pandas
+scikit-learn
+xgboost
+catboost

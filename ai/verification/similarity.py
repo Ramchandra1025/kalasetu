@@ -167,15 +167,17 @@ def find_best_match(
     ]
 
     status = (
-        "VERIFIED"
+        "MATCH_CANDIDATE"
         if best_similarity >= VERIFICATION_THRESHOLD
-        else "SUSPICIOUS"
+        else "NO_CONFIDENT_MATCH"
     )
 
     return {
         "detected_craft": best_label,
         "similarity": best_similarity,
-        "confidence": best_similarity,
+        "confidence": None,
+        "similarity_is_probability": False,
+        "authenticity_proven": False,
         "status": status,
         "reference_image": best_path,
     }
@@ -273,15 +275,17 @@ def match_craft_prototypes(
     best_label, best_similarity = results[0]
 
     status = (
-        "VERIFIED"
+        "MATCH_CANDIDATE"
         if best_similarity >= VERIFICATION_THRESHOLD
-        else "SUSPICIOUS"
+        else "NO_CONFIDENT_MATCH"
     )
 
     return {
         "detected_craft": best_label,
         "similarity": best_similarity,
-        "confidence": best_similarity,
+        "confidence": None,
+        "similarity_is_probability": False,
+        "authenticity_proven": False,
         "status": status,
         "all_scores": dict(results),
     }

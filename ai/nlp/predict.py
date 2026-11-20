@@ -1,8 +1,6 @@
 import argparse
 import json
 
-from sklearn.metrics.pairwise import cosine_similarity
-
 from .config import RESEARCH_VALID
 
 from .features import (
@@ -50,20 +48,9 @@ def predict(
         matrix[0],
     )
 
-    # --------------------------------------------------------
-    # Similarity against training vocabulary
-    # --------------------------------------------------------
-
-    training_matrix = (
-        model.vectorizer.transform(
-            [cleaned]
-        )
-    )
-
-    self_similarity = cosine_similarity(
-        matrix,
-        training_matrix,
-    )[0][0]
+    # TF-IDF encodes lexical overlap; it does not calculate semantic similarity.
+    # A self-comparison would always return 1.0 and is intentionally omitted.
+    nonzero_terms = int(matrix.nnz)
 
     result = {
         "text": text,
@@ -75,18 +62,15 @@ def predict(
         "semantic_representation_size": (
             matrix.shape[1]
         ),
-        "self_similarity": round(
-            float(self_similarity),
-            4,
-        ),
+        "nonzero_tfidf_terms": nonzero_terms,
+        "category_detection_method": "domain_keyword_rules",
         "model": "TF-IDF",
         "model_version": "1.0.0",
         "research_valid": RESEARCH_VALID,
         "note": (
-            "Prototype NLP intelligence using "
-            "synthetic data. Semantic results are "
-            "not research-valid until evaluated "
-            "on a representative real dataset."
+            "TF-IDF is lexical feature extraction, not a semantic embedding model. "
+            "Category confidence is a keyword-score ratio, not a calibrated probability. "
+            "Research claims require human-labelled multilingual query-product relevance data."
         ),
     }
 
